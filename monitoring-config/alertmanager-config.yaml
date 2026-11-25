@@ -1,0 +1,31 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: app-remediation-routing
+  namespace: app
+  labels:
+    app.kubernetes.io/name: remediation-engine
+    app.kubernetes.io/part-of: self-healing-cloud-platform
+    release: kube-prometheus-stack
+spec:
+  route:
+    receiver: remediation-webhook
+    groupBy:
+      - alertname
+      - namespace
+      - deployment
+    groupWait: 10s
+    groupInterval: 30s
+    repeatInterval: 5m
+    matchers:
+      - name: severity
+        value: critical
+        matchType: "="
+      - name: namespace
+        value: app
+        matchType: "="
+  receivers:
+    - name: remediation-webhook
+      webhookConfigs:
+        - url: http://remediation-engine.self-healing.svc.cluster.local:8000/webhook
+          sendResolved: true

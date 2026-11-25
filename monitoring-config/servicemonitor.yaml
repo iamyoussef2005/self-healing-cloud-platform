@@ -1,0 +1,22 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: demo-app-backend
+  namespace: app
+  labels:
+    app.kubernetes.io/name: demo-app-backend
+    app.kubernetes.io/part-of: self-healing-cloud-platform
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - app
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: demo-app-backend
+      app.kubernetes.io/component: backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

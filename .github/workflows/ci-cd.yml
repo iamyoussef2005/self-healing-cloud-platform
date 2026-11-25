@@ -1,0 +1,168 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r app/backend/requirements.txt
+
+      - name: Run backend pytest suite
+        working-directory: app/backend
+        run: pytest -v
+
+      - name: Install remediation-engine test dependencies
+        run: pip install -r remediation-engine/requirements.txt
+
+      - name: Run remediation-engine pytest suite
+        working-directory: remediation-engine
+        run: pytest -v
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint Helm chart
+        run: helm lint charts/demo-app
+
+  security-scan:
+    name: Build & Trivy Scan (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    needs: test
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - service: self-healing-backend
+            context: ./app/backend
+          - service: self-healing-frontend
+            context: ./app/frontend
+          - service: remediation-engine
+            context: ./remediation-engine
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for scan
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          load: true
+          push: false
+          tags: ${{ matrix.service }}:${{ github.sha }}
+
+      - name: Scan image with Trivy (CRITICAL & HIGH)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ matrix.service }}:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+
+  build-and-push:
+    name: Build & Push (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    needs: security-scan
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - service: self-healing-backend
+            context: ./app/backend
+          - service: self-healing-frontend
+            context: ./app/frontend
+          - service: remediation-engine
+            context: ./remediation-engine
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract lowercase repository owner
+        id: meta
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.owner }}/${{ matrix.service }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ steps.meta.outputs.owner }}/${{ matrix.service }}:latest
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  gitops-update:
+    name: Update GitOps Helm Values
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Update image repositories and tags in charts/demo-app/values.yaml
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          OWNER_LC=$(echo "${REPO_OWNER}" | tr '[:upper:]' '[:lower:]')
+          yq -i "
+            .backend.image.repository = \"${REGISTRY}/${OWNER_LC}/self-healing-backend\" |
+            .backend.image.tag = \"${IMAGE_TAG}\" |
+            .frontend.image.repository = \"${REGISTRY}/${OWNER_LC}/self-healing-frontend\" |
+            .frontend.image.tag = \"${IMAGE_TAG}\"
+          " charts/demo-app/values.yaml
+
+      - name: Commit and push updated values.yaml
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet charts/demo-app/values.yaml; then
+            echo "No changes to charts/demo-app/values.yaml"
+            exit 0
+          fi
+          git add charts/demo-app/values.yaml
+          git commit -m "chore(gitops): update demo-app image tags to ${GITHUB_SHA} [skip ci]"
+          git push origin main

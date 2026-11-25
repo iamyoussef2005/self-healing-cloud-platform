@@ -1,0 +1,95 @@
+nameOverride: ""
+fullnameOverride: ""
+
+backend:
+  replicaCount: 2
+  image:
+    repository: self-healing-backend
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8000
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  probes:
+    liveness:
+      path: /health
+      initialDelaySeconds: 10
+      periodSeconds: 15
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      path: /ready
+      initialDelaySeconds: 5
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+frontend:
+  replicaCount: 2
+  image:
+    repository: self-healing-frontend
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  probes:
+    liveness:
+      path: /
+      initialDelaySeconds: 5
+      periodSeconds: 15
+      timeoutSeconds: 3
+      failureThreshold: 3
+    readiness:
+      path: /
+      initialDelaySeconds: 3
+      periodSeconds: 10
+      timeoutSeconds: 3
+      failureThreshold: 3
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: demo-app.local
+      paths:
+        - path: /api
+          pathType: Prefix
+          service: backend
+        - path: /chaos
+          pathType: Prefix
+          service: backend
+        - path: /health
+          pathType: Exact
+          service: backend
+        - path: /ready
+          pathType: Exact
+          service: backend
+        - path: /metrics
+          pathType: Exact
+          service: backend
+        - path: /
+          pathType: Prefix
+          service: frontend
+  tls: []

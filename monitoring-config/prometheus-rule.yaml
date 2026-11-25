@@ -1,0 +1,55 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: demo-app-alerts
+  namespace: app
+  labels:
+    app.kubernetes.io/name: demo-app
+    app.kubernetes.io/part-of: self-healing-cloud-platform
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: demo-app.rules
+      rules:
+        - alert: HighSimulatedMemory
+          expr: app_simulated_memory_mb{namespace="app"} > 400
+          for: 30s
+          labels:
+            severity: critical
+            namespace: app
+            deployment: demo-app-backend
+          annotations:
+            summary: "High simulated memory usage on {{ $labels.pod }}"
+            description: "Simulated memory usage is {{ $value }} MB (threshold: 400 MB) for over 30s."
+
+        - alert: HighErrorRate
+          expr: |
+            (
+              sum by (namespace) (rate(http_requests_total{namespace="app", status=~"5..|5xx"}[1m]))
+              /
+              clamp_min(sum by (namespace) (rate(http_requests_total{namespace="app"}[1m])), 1e-9)
+            ) > 0.05
+          for: 30s
+          labels:
+            severity: critical
+            namespace: app
+            deployment: demo-app-backend
+          annotations:
+            summary: "High HTTP 5xx error rate in app namespace"
+            description: "HTTP 5xx error rate exceeded 5% (current: {{ $value | humanizePercentage }}) for over 30s."
+
+        - alert: PodCrashLooping
+          expr: |
+            label_replace(
+              sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total{namespace="app"}[5m])) > 2,
+              "deployment",
+              "$1",
+              "pod",
+              "^(.*)-[a-z0-9]+-[a-z0-9]+$"
+            )
+          for: 30s
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash-looping"
+            description: "Container in pod {{ $labels.namespace }}/{{ $labels.pod }} restarted more than 2 times in the last 5 minutes."
