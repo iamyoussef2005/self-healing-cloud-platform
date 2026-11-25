@@ -1,0 +1,32 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: remediation-app-role
+  namespace: app
+  labels:
+    app.kubernetes.io/name: remediation-engine
+    app.kubernetes.io/part-of: self-healing-cloud-platform
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: remediation-app-rolebinding
+  namespace: app
+  labels:
+    app.kubernetes.io/name: remediation-engine
+    app.kubernetes.io/part-of: self-healing-cloud-platform
+subjects:
+  - kind: ServiceAccount
+    name: remediation-sa
+    namespace: self-healing
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: remediation-app-role
